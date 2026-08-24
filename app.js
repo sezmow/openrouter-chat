@@ -1,69 +1,17 @@
 (function () {
   "use strict";
 
+  const API_BASE = "https://openrouter.ai/api/v1";
   const DEFAULT_MODEL = "openai/gpt-4o-mini";
-  const DEFAULT_PROVIDER = "openrouter";
   const STORAGE_KEYS = {
     apiKey: "claudechat_api_key",
-    nvidiaApiKey: "claudechat_nvidia_api_key",
-    nvidiaProxyUrl: "claudechat_nvidia_proxy_url",
     systemPrompt: "claudechat_system_prompt",
     model: "claudechat_model",
-    provider: "claudechat_provider",
     conversations: "claudechat_conversations",
     activeId: "claudechat_active_id",
     webSearch: "claudechat_web_search",
   };
   const DEFAULT_REASONING_EFFORTS = ["high", "medium", "low"];
-
-  // NVIDIA's own model-listing endpoint (integrate.api.nvidia.com/v1/models)
-  // returns bare ids only — no pricing, context length, or capability flags.
-  // This is a hand-curated best-effort supplement built from NVIDIA's public
-  // catalog and model documentation, so the existing filters have something
-  // to work with. It may be incomplete or go stale as NVIDIA adds models —
-  // anything not listed here is just treated as an untagged general chat model.
-  // All NVIDIA NIM catalog models are free to use with a personal API key.
-  const NVIDIA_NON_CHAT = new Set([
-    "baai/bge-m3", "google/deplot", "meta/llama-guard-4-12b",
-    "nvidia/ai-synthetic-video-detector", "nvidia/embed-qa-4",
-    "nvidia/ising-calibration-1.5-31b",
-    "nvidia/llama-3.1-nemoguard-8b-content-safety",
-    "nvidia/llama-3.1-nemoguard-8b-topic-control",
-    "nvidia/llama-3.1-nemotron-safety-guard-8b-v3",
-    "nvidia/llama-3.2-nemoretriever-1b-vlm-embed-v1",
-    "nvidia/llama-3.2-nv-embedqa-1b-v1",
-    "nvidia/llama-nemotron-embed-1b-v2",
-    "nvidia/llama-nemotron-embed-vl-1b-v2",
-    "nvidia/nemoretriever-parse",
-    "nvidia/nemotron-3-embed-1b",
-    "nvidia/nemotron-3.5-content-safety",
-    "nvidia/nemotron-4-340b-reward",
-    "nvidia/nemotron-parse",
-    "nvidia/nv-embed-v1", "nvidia/nv-embedcode-7b-v1",
-    "nvidia/nv-embedqa-e5-v5", "nvidia/nv-embedqa-mistral-7b-v2",
-    "nvidia/nvclip",
-    "nvidia/riva-translate-4b-instruct", "nvidia/riva-translate-4b-instruct-v1.1",
-    "nvidia/riva-translate-4b-instruct-v2",
-    "snowflake/arctic-embed-l",
-  ]);
-  const NVIDIA_THINKING = new Set([
-    "minimaxai/minimax-m3", "moonshotai/kimi-k2.6", "moonshotai/kimi-k3",
-    "nvidia/cosmos-reason2-8b", "nvidia/llama-3.1-nemotron-ultra-253b-v1",
-    "nvidia/llama-3.3-nemotron-super-49b-v1", "nvidia/llama-3.3-nemotron-super-49b-v1.5",
-    "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning", "nvidia/nemotron-3-super-120b-a12b",
-    "nvidia/nemotron-3-ultra-550b-a55b", "nvidia/nvidia-nemotron-nano-9b-v2",
-    "openai/gpt-oss-120b", "openai/gpt-oss-20b",
-  ]);
-  const PROVIDERS = {
-    openrouter: {
-      label: "OpenRouter",
-      apiBase: "https://openrouter.ai/api/v1",
-    },
-    nvidia: {
-      label: "NVIDIA",
-      apiBase: null, // resolved from state.providers.nvidia.proxyUrl at call time
-    },
-  };
   const THINKING_PHASES = {
     connecting: { icon: "\u{1F4AD}", label: "Thinking" },
     searching: { icon: "\u{1F310}", label: "Searching the web" },
@@ -77,38 +25,20 @@
     regenerate: '<svg class="icon icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7"/><polyline points="21 3 21 9 15 9"/></svg>',
   };
 
-  // Strips trailing slashes and a trailing "/v1" — the app appends its own
-  // "/v1/..." suffix, so a proxy URL saved with "/v1" already on it (an easy
-  // mistake, since that's how most API base URLs look) would otherwise
-  // produce a doubled "/v1/v1/..." path and a 404 from NVIDIA's API.
-  function normalizeProxyUrl(raw) {
-    return (raw || "").trim().replace(/\/+$/, "").replace(/\/v1$/i, "").replace(/\/+$/, "");
-  }
-
   // ---------- State ----------
   let state = {
-    providers: {
-      openrouter: { apiKey: localStorage.getItem(STORAGE_KEYS.apiKey) || "" },
-      nvidia: {
-        apiKey: localStorage.getItem(STORAGE_KEYS.nvidiaApiKey) || "",
-        proxyUrl: normalizeProxyUrl(localStorage.getItem(STORAGE_KEYS.nvidiaProxyUrl)),
-      },
-    },
+    apiKey: localStorage.getItem(STORAGE_KEYS.apiKey) || "",
     systemPrompt: localStorage.getItem(STORAGE_KEYS.systemPrompt) || "",
     model: localStorage.getItem(STORAGE_KEYS.model) || DEFAULT_MODEL,
-    provider: localStorage.getItem(STORAGE_KEYS.provider) || DEFAULT_PROVIDER,
     conversations: [],
     activeId: null,
     isStreaming: false,
     abortController: null,
-    // Per-provider model maps, e.g. modelsByProviderAndId.openrouter["gpt-4o"].
-    modelsByProviderAndId: { openrouter: {}, nvidia: {} },
-    modelFilters: { pricing: "all", imageGen: false, thinking: false, provider: "all" },
+    modelsById: {},
+    allModels: [],
+    modelFilters: { pricing: "all", imageGen: false, thinking: false },
     webSearchEnabled: localStorage.getItem(STORAGE_KEYS.webSearch) === "1",
   };
-  function hasAnyApiKey() {
-    return !!(state.providers.openrouter.apiKey || state.providers.nvidia.apiKey);
-  }
 
   try {
     const raw = localStorage.getItem(STORAGE_KEYS.conversations);
@@ -137,22 +67,17 @@
     settingsModal: document.getElementById("settings-modal"),
     apiKeyInput: document.getElementById("api-key-input"),
     toggleKeyVisibility: document.getElementById("toggle-key-visibility"),
-    nvidiaKeyInput: document.getElementById("nvidia-key-input"),
-    toggleNvidiaKeyVisibility: document.getElementById("toggle-nvidia-key-visibility"),
-    nvidiaProxyInput: document.getElementById("nvidia-proxy-input"),
     systemPromptInput: document.getElementById("system-prompt-input"),
     settingsCancelBtn: document.getElementById("settings-cancel-btn"),
     settingsSaveBtn: document.getElementById("settings-save-btn"),
     pricingFilter: document.getElementById("pricing-filter"),
     filterImageGen: document.getElementById("filter-image-gen"),
     filterThinking: document.getElementById("filter-thinking"),
-    providerFilter: document.getElementById("provider-filter"),
     effortSelect: document.getElementById("effort-select"),
     webToggle: document.getElementById("web-toggle"),
     filtersBtn: document.getElementById("filters-btn"),
     filtersPopover: document.getElementById("filters-popover"),
     composerCost: document.getElementById("composer-cost"),
-    providerBadge: document.getElementById("provider-badge"),
   };
 
   el.webToggle.classList.toggle("active", state.webSearchEnabled);
@@ -355,20 +280,11 @@
   function clearError() {
     el.errorContainer.innerHTML = "";
   }
-  function authHeaders(providerId) {
+  function authHeaders() {
     return {
       "Content-Type": "application/json",
-      "Authorization": "Bearer " + state.providers[providerId].apiKey,
+      "Authorization": "Bearer " + state.apiKey,
     };
-  }
-  function apiBaseFor(providerId) {
-    if (providerId === "nvidia") return state.providers.nvidia.proxyUrl + "/v1";
-    return PROVIDERS[providerId].apiBase;
-  }
-  function isProviderUsable(providerId) {
-    if (!state.providers[providerId].apiKey) return false;
-    if (providerId === "nvidia" && !state.providers.nvidia.proxyUrl) return false;
-    return true;
   }
 
   // ---------- Conversations ----------
@@ -377,8 +293,7 @@
   }
   function createConversation() {
     const startModel = el.modelInput.value.trim() || state.model || DEFAULT_MODEL;
-    const startProvider = state.provider || DEFAULT_PROVIDER;
-    const conv = { id: uid(), title: "New chat", messages: [], createdAt: Date.now(), model: startModel, provider: startProvider };
+    const conv = { id: uid(), title: "New chat", messages: [], createdAt: Date.now(), model: startModel };
     state.conversations.unshift(conv);
     state.activeId = conv.id;
     saveConversations();
@@ -405,29 +320,11 @@
     renderSidebar();
     renderMessages();
   }
-  function setModelAndProvider(model, providerId) {
-    state.model = model;
-    state.provider = providerId;
-    localStorage.setItem(STORAGE_KEYS.model, model);
-    localStorage.setItem(STORAGE_KEYS.provider, providerId);
-    const conv = getActiveConversation();
-    if (conv) { conv.model = model; conv.provider = providerId; saveConversations(); }
-    updateProviderBadge(providerId);
-  }
-  function updateProviderBadge(providerId) {
-    const p = PROVIDERS[providerId];
-    el.providerBadge.textContent = p ? p.label : "";
-  }
   function applyActiveConversationModel() {
     const conv = getActiveConversation();
     const model = (conv && conv.model) || state.model || DEFAULT_MODEL;
-    const providerId = (conv && conv.provider) || state.provider || DEFAULT_PROVIDER;
     el.modelInput.value = model;
-    state.model = model;
-    state.provider = providerId;
-    localStorage.setItem(STORAGE_KEYS.model, model);
-    localStorage.setItem(STORAGE_KEYS.provider, providerId);
-    updateProviderBadge(providerId);
+    setModel(model);
     refreshEffortSelect();
   }
 
@@ -624,22 +521,8 @@
   }
 
   // ---------- Model capabilities ----------
-  function providerPriorityOrder() {
-    return state.modelFilters.provider === "nvidia" ? ["nvidia", "openrouter"] : ["openrouter", "nvidia"];
-  }
-  function findModelAcrossProviders(modelId) {
-    const order = providerPriorityOrder();
-    for (const p of order) {
-      const hit = state.modelsByProviderAndId[p][modelId];
-      if (hit) return hit;
-    }
-    return null;
-  }
-  function getModelInfo(modelId, providerHint) {
-    if (providerHint && state.modelsByProviderAndId[providerHint] && state.modelsByProviderAndId[providerHint][modelId]) {
-      return state.modelsByProviderAndId[providerHint][modelId];
-    }
-    return findModelAcrossProviders(modelId);
+  function getModelInfo(modelId) {
+    return state.modelsById[modelId] || null;
   }
   function getReasoningCapability(info) {
     if (!info) return null;
@@ -650,14 +533,6 @@
     const efforts = (info.reasoning && info.reasoning.supported_efforts) || DEFAULT_REASONING_EFFORTS;
     const defaultEffort = info.reasoning && info.reasoning.default_effort;
     return { mandatory, efforts, defaultEffort };
-  }
-  // Whether a model can be pointed at "thinking" mode at all, for the filter.
-  // OpenRouter exposes this via real metadata; NVIDIA doesn't, so this falls
-  // back to the hand-curated NVIDIA_THINKING set instead.
-  function isThinkingModel(info) {
-    if (!info) return false;
-    if (info.provider === "nvidia") return !!info._thinking;
-    return !!getReasoningCapability(info);
   }
   function isFreeModel(info) {
     const p = info.pricing || {};
@@ -671,121 +546,76 @@
   }
   function passesModelFilters(info) {
     const f = state.modelFilters;
-    if (f.provider !== "all" && info.provider !== f.provider) return false;
     if (f.pricing === "free" && !isFreeModel(info)) return false;
     if (f.pricing === "paid" && isFreeModel(info)) return false;
     if (f.imageGen && !hasImageOutput(info)) return false;
-    if (f.thinking && !isThinkingModel(info)) return false;
+    if (f.thinking && !getReasoningCapability(info)) return false;
     return true;
   }
 
   // ---------- Models ----------
   function updateFiltersBadge() {
     const f = state.modelFilters;
-    const active = f.pricing !== "all" || f.imageGen || f.thinking || f.provider !== "all";
+    const active = f.pricing !== "all" || f.imageGen || f.thinking;
     el.filtersBtn.classList.toggle("has-active", active);
   }
   function rebuildModelsDatalist() {
-    const order = providerPriorityOrder();
-    const seen = new Set();
-    const filtered = [];
-    let totalChatModels = 0;
-    order.forEach((p) => {
-      Object.values(state.modelsByProviderAndId[p]).forEach((info) => {
-        if (info.isChatModel === false) return;
-        totalChatModels++;
-        if (seen.has(info.id)) return; // id collision across providers: first in priority order wins
-        if (!passesModelFilters(info)) return;
-        seen.add(info.id);
-        filtered.push(info);
-      });
-    });
-    filtered.sort((a, b) => a.id.localeCompare(b.id));
+    const filtered = state.allModels.filter(passesModelFilters);
     el.modelsDatalist.innerHTML = "";
     filtered.forEach((m) => {
       const opt = document.createElement("option");
       opt.value = m.id;
-      const displayName = m.name && m.name !== m.id ? (m.name + " (" + m.id + ")") : m.id;
-      opt.label = displayName + " — " + PROVIDERS[m.provider].label;
+      opt.label = m.name ? (m.name + " (" + m.id + ")") : m.id;
       el.modelsDatalist.appendChild(opt);
     });
-    el.topbarStatus.textContent = totalChatModels
-      ? (filtered.length === totalChatModels ? (filtered.length + " models available") : (filtered.length + " of " + totalChatModels + " models"))
-      : "";
-    if (filtered.length) {
-      const current = el.modelInput.value.trim();
-      const stillAvailable = current && (state.modelsByProviderAndId.openrouter[current] || state.modelsByProviderAndId.nvidia[current]);
-      if (!stillAvailable) {
-        el.modelInput.value = filtered[0].id;
-        setModelAndProvider(filtered[0].id, filtered[0].provider);
-      }
+    if (state.allModels.length) {
+      el.topbarStatus.textContent = filtered.length === state.allModels.length
+        ? (filtered.length + " models available")
+        : (filtered.length + " of " + state.allModels.length + " models");
+    }
+    if (!el.modelInput.value && filtered.length) {
+      el.modelInput.value = filtered[0].id;
+      setModel(filtered[0].id);
+      const conv = getActiveConversation();
+      if (conv) { conv.model = filtered[0].id; saveConversations(); }
     }
     updateFiltersBadge();
     refreshEffortSelect();
   }
-  async function fetchOpenRouterModels() {
-    if (!isProviderUsable("openrouter")) { state.modelsByProviderAndId.openrouter = {}; return; }
-    const res = await fetch(apiBaseFor("openrouter") + "/models", { headers: authHeaders("openrouter") });
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      throw new Error("OpenRouter: " + ((body.error && body.error.message) || ("HTTP " + res.status)));
-    }
-    const data = await res.json();
-    const map = {};
-    (data.data || []).forEach((m) => {
-      m.provider = "openrouter";
-      m.isChatModel = true;
-      map[m.id] = m;
-    });
-    state.modelsByProviderAndId.openrouter = map;
-  }
-  async function fetchNvidiaModels() {
-    if (!isProviderUsable("nvidia")) { state.modelsByProviderAndId.nvidia = {}; return; }
-    const res = await fetch(apiBaseFor("nvidia") + "/models", { headers: authHeaders("nvidia") });
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      throw new Error("NVIDIA: " + ((body.error && body.error.message) || ("HTTP " + res.status)));
-    }
-    const data = await res.json();
-    const map = {};
-    (data.data || []).forEach((raw) => {
-      map[raw.id] = {
-        id: raw.id,
-        name: raw.id,
-        provider: "nvidia",
-        isChatModel: !NVIDIA_NON_CHAT.has(raw.id),
-        pricing: { prompt: "0", completion: "0" },
-        architecture: { output_modalities: ["text"] },
-        supported_parameters: [],
-        _thinking: NVIDIA_THINKING.has(raw.id),
-      };
-    });
-    state.modelsByProviderAndId.nvidia = map;
-  }
   async function fetchModels() {
-    if (!hasAnyApiKey()) {
+    if (!state.apiKey) {
       openSettings();
-      showError("Add an API key first, then fetch models.");
+      showError("Add your API key first, then fetch models.");
       return;
     }
     el.fetchModelsBtn.disabled = true;
     el.fetchModelsBtn.textContent = "Fetching...";
     clearError();
-    const errors = [];
-    await Promise.all([
-      fetchOpenRouterModels().catch((e) => errors.push(e.message)),
-      fetchNvidiaModels().catch((e) => errors.push(e.message)),
-    ]);
-    rebuildModelsDatalist();
-    if (errors.length) showError("Couldn't fetch some models: " + errors.join(" / "));
-    el.fetchModelsBtn.disabled = false;
-    el.fetchModelsBtn.textContent = "Fetch models";
+    try {
+      const res = await fetch(API_BASE + "/models", { headers: authHeaders() });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error((body.error && body.error.message) || ("HTTP " + res.status));
+      }
+      const data = await res.json();
+      state.allModels = (data.data || []).slice().sort((a, b) => a.id.localeCompare(b.id));
+      state.modelsById = {};
+      state.allModels.forEach((m) => { state.modelsById[m.id] = m; });
+      rebuildModelsDatalist();
+    } catch (err) {
+      showError("Couldn't fetch models: " + err.message);
+    } finally {
+      el.fetchModelsBtn.disabled = false;
+      el.fetchModelsBtn.textContent = "Fetch models";
+    }
+  }
+  function setModel(m) {
+    state.model = m;
+    localStorage.setItem(STORAGE_KEYS.model, m);
   }
   function refreshEffortSelect() {
     const modelId = el.modelInput.value.trim() || DEFAULT_MODEL;
-    const conv = getActiveConversation();
-    const providerHint = (conv && conv.provider) || state.provider;
-    const info = getModelInfo(modelId, providerHint);
+    const info = getModelInfo(modelId);
     const cap = getReasoningCapability(info);
     const prevValue = el.effortSelect.value;
 
@@ -828,24 +658,17 @@
   async function sendMessage() {
     const text = el.composerInput.value.trim();
     if (!text || state.isStreaming) return;
-    if (!hasAnyApiKey()) {
+    if (!state.apiKey) {
       openSettings();
-      showError("Add an API key first.");
+      showError("Add your API key first.");
       return;
     }
     const model = el.modelInput.value.trim() || DEFAULT_MODEL;
-    const providerId = state.provider || DEFAULT_PROVIDER;
-    if (!isProviderUsable(providerId)) {
-      openSettings();
-      showError((PROVIDERS[providerId] ? PROVIDERS[providerId].label : providerId) + " isn't set up yet — add its API key" + (providerId === "nvidia" ? " and proxy URL" : "") + " in settings.");
-      return;
-    }
-    setModelAndProvider(model, providerId);
+    setModel(model);
 
     let conv = getActiveConversation();
     if (!conv) conv = createConversation();
     conv.model = model;
-    conv.provider = providerId;
 
     conv.messages.push({ role: "user", content: text });
     if (conv.messages.filter((m) => m.role === "user").length === 1) autoTitle(conv);
@@ -886,10 +709,9 @@
   }
   async function generateAssistantReply(conv) {
     const model = conv.model || el.modelInput.value.trim() || DEFAULT_MODEL;
-    const providerId = conv.provider || state.provider || DEFAULT_PROVIDER;
-    const modelInfo = getModelInfo(model, providerId);
+    const modelInfo = getModelInfo(model);
     const canGenerateImages = !!(modelInfo && hasImageOutput(modelInfo));
-    const idlePhase = canGenerateImages ? "generatingImage" : (state.webSearchEnabled && providerId === "openrouter" ? "searching" : "connecting");
+    const idlePhase = canGenerateImages ? "generatingImage" : (state.webSearchEnabled ? "searching" : "connecting");
 
     const assistantBubble = createBareAssistantBubble();
     setThinkingPhase(assistantBubble, idlePhase);
@@ -917,7 +739,7 @@
         payload.reasoning = reasoningCap.mandatory ? { effort: effortVal } : { enabled: true, effort: effortVal };
       }
     }
-    if (state.webSearchEnabled && providerId === "openrouter") {
+    if (state.webSearchEnabled) {
       payload.plugins = [{ id: "web" }];
     }
     if (canGenerateImages) {
@@ -929,9 +751,9 @@
     let images = [];
     let usageInfo = null;
     try {
-      const res = await fetch(apiBaseFor(providerId) + "/chat/completions", {
+      const res = await fetch(API_BASE + "/chat/completions", {
         method: "POST",
-        headers: authHeaders(providerId),
+        headers: authHeaders(),
         body: JSON.stringify(payload),
         signal: controller.signal,
       });
@@ -1032,13 +854,9 @@
 
   // ---------- Settings modal ----------
   function openSettings() {
-    el.apiKeyInput.value = state.providers.openrouter.apiKey;
+    el.apiKeyInput.value = state.apiKey;
     el.apiKeyInput.type = "password";
     el.toggleKeyVisibility.textContent = "Show";
-    el.nvidiaKeyInput.value = state.providers.nvidia.apiKey;
-    el.nvidiaKeyInput.type = "password";
-    el.toggleNvidiaKeyVisibility.textContent = "Show";
-    el.nvidiaProxyInput.value = state.providers.nvidia.proxyUrl;
     el.systemPromptInput.value = state.systemPrompt;
     el.settingsModal.classList.remove("hidden");
   }
@@ -1046,17 +864,13 @@
     el.settingsModal.classList.add("hidden");
   }
   function saveSettings() {
-    state.providers.openrouter.apiKey = el.apiKeyInput.value.trim();
-    state.providers.nvidia.apiKey = el.nvidiaKeyInput.value.trim();
-    state.providers.nvidia.proxyUrl = normalizeProxyUrl(el.nvidiaProxyInput.value);
+    state.apiKey = el.apiKeyInput.value.trim();
     state.systemPrompt = el.systemPromptInput.value;
-    localStorage.setItem(STORAGE_KEYS.apiKey, state.providers.openrouter.apiKey);
-    localStorage.setItem(STORAGE_KEYS.nvidiaApiKey, state.providers.nvidia.apiKey);
-    localStorage.setItem(STORAGE_KEYS.nvidiaProxyUrl, state.providers.nvidia.proxyUrl);
+    localStorage.setItem(STORAGE_KEYS.apiKey, state.apiKey);
     localStorage.setItem(STORAGE_KEYS.systemPrompt, state.systemPrompt);
     closeSettings();
     clearError();
-    if (hasAnyApiKey()) fetchModels();
+    if (state.apiKey) fetchModels();
   }
 
   // ---------- Event listeners ----------
@@ -1083,20 +897,15 @@
     el.apiKeyInput.type = show ? "text" : "password";
     el.toggleKeyVisibility.textContent = show ? "Hide" : "Show";
   });
-  el.toggleNvidiaKeyVisibility.addEventListener("click", () => {
-    const show = el.nvidiaKeyInput.type === "password";
-    el.nvidiaKeyInput.type = show ? "text" : "password";
-    el.toggleNvidiaKeyVisibility.textContent = show ? "Hide" : "Show";
-  });
   el.settingsModal.addEventListener("click", (e) => {
     if (e.target === el.settingsModal) closeSettings();
   });
   el.fetchModelsBtn.addEventListener("click", fetchModels);
   el.modelInput.addEventListener("change", () => {
     const model = el.modelInput.value.trim();
-    const resolved = findModelAcrossProviders(model);
-    const providerId = resolved ? resolved.provider : ((getActiveConversation() && getActiveConversation().provider) || state.provider || DEFAULT_PROVIDER);
-    setModelAndProvider(model, providerId);
+    setModel(model);
+    const conv = getActiveConversation();
+    if (conv) { conv.model = model; saveConversations(); }
     refreshEffortSelect();
   });
   el.pricingFilter.addEventListener("change", () => {
@@ -1109,10 +918,6 @@
   });
   el.filterThinking.addEventListener("change", () => {
     state.modelFilters.thinking = el.filterThinking.checked;
-    rebuildModelsDatalist();
-  });
-  el.providerFilter.addEventListener("change", () => {
-    state.modelFilters.provider = el.providerFilter.value;
     rebuildModelsDatalist();
   });
   el.filtersBtn.addEventListener("click", (e) => {
@@ -1165,7 +970,7 @@
     renderSidebar();
     renderMessages();
     updateSendButton();
-    if (!hasAnyApiKey()) {
+    if (!state.apiKey) {
       openSettings();
     } else {
       fetchModels();

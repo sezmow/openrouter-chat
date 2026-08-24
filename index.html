@@ -37,7 +37,6 @@
       <div id="model-select-wrap">
         <input list="models-datalist" id="model-input" placeholder="Model (e.g. openai/gpt-4o)">
         <datalist id="models-datalist"></datalist>
-        <span class="provider-badge" id="provider-badge"></span>
         <button id="fetch-models-btn" class="topbar-btn">Fetch models</button>
         <button id="filters-btn" class="topbar-btn" type="button" aria-expanded="false">
           <svg class="icon icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="4" y1="6" x2="20" y2="6"/><circle cx="9" cy="6" r="2" fill="currentColor" stroke="none"/><line x1="4" y1="12" x2="20" y2="12"/><circle cx="15" cy="12" r="2" fill="currentColor" stroke="none"/><line x1="4" y1="18" x2="20" y2="18"/><circle cx="7" cy="18" r="2" fill="currentColor" stroke="none"/></svg>
@@ -54,12 +53,6 @@
           <div class="popover-label">Capabilities</div>
           <label class="popover-check"><input type="checkbox" id="filter-image-gen"> Image generation</label>
           <label class="popover-check"><input type="checkbox" id="filter-thinking"> Thinking / reasoning</label>
-          <div class="popover-label">Provider</div>
-          <select id="provider-filter" title="Filter by provider">
-            <option value="all">All providers</option>
-            <option value="openrouter">OpenRouter</option>
-            <option value="nvidia">NVIDIA</option>
-          </select>
         </div>
       </div>
       <span class="topbar-status" id="topbar-status"></span>
@@ -82,7 +75,7 @@
           <svg class="icon stop-icon" viewBox="0 0 24 24"><rect x="6.5" y="6.5" width="11" height="11" rx="2" fill="currentColor"/></svg>
         </button>
       </div>
-      <div class="composer-hint">Runs entirely in your browser. Calls OpenRouter directly, and NVIDIA through your configured proxy. Keys are stored only in this browser's local storage.</div>
+      <div class="composer-hint">Runs entirely in your browser and calls the OpenRouter API directly. Your key is stored only in this browser's local storage.</div>
       <div class="composer-hint" id="composer-cost"></div>
     </div>
   </div>
@@ -90,34 +83,15 @@
 
 <div class="modal-overlay hidden" id="settings-modal">
   <div class="modal">
-    <h2 id="settings-modal-title">API keys &amp; settings</h2>
-    <p class="modal-intro" id="settings-modal-intro">Add a key for at least one provider to start chatting. Both are optional — add either, or both.</p>
-
-    <div class="provider-section">
-      <div class="provider-section-label">OpenRouter</div>
-      <label for="api-key-input">API key</label>
-      <div class="key-row">
-        <input type="password" id="api-key-input" placeholder="sk-or-v1-...">
-        <button class="btn" id="toggle-key-visibility">Show</button>
-      </div>
-      <div class="modal-note">Get a key at openrouter.ai/keys. Calls go straight from your browser to openrouter.ai.</div>
+    <h2>API key &amp; settings</h2>
+    <label for="api-key-input">OpenRouter API key</label>
+    <div class="key-row">
+      <input type="password" id="api-key-input" placeholder="sk-or-v1-...">
+      <button class="btn" id="toggle-key-visibility">Show</button>
     </div>
-
-    <div class="provider-section">
-      <div class="provider-section-label">NVIDIA</div>
-      <label for="nvidia-key-input">API key</label>
-      <div class="key-row">
-        <input type="password" id="nvidia-key-input" placeholder="nvapi-...">
-        <button class="btn" id="toggle-nvidia-key-visibility">Show</button>
-      </div>
-      <label for="nvidia-proxy-input">CORS proxy URL</label>
-      <input type="text" id="nvidia-proxy-input" placeholder="https://your-worker.workers.dev (no /v1 at the end)">
-      <div class="modal-note">Get a key at build.nvidia.com. NVIDIA's API has no CORS support, so browser requests need a small relay — see <code>nvidia-proxy-worker.js</code> in the repo and the README for the one-time Cloudflare Worker setup. Your key is sent through the proxy on each request only; it's never stored there.</div>
-    </div>
-
     <label for="system-prompt-input">System prompt (optional)</label>
     <textarea id="system-prompt-input" placeholder="e.g. You are a concise assistant."></textarea>
-    <div class="modal-note">Keys are saved only in this browser's localStorage.</div>
+    <div class="modal-note">Your key never leaves your browser except in direct calls to openrouter.ai. It is saved in localStorage on this device. Get a key at openrouter.ai/keys.</div>
     <div class="modal-actions">
       <button class="btn" id="settings-cancel-btn">Cancel</button>
       <button class="btn btn-primary" id="settings-save-btn">Save</button>
