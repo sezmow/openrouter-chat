@@ -77,13 +77,21 @@
     regenerate: '<svg class="icon icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7"/><polyline points="21 3 21 9 15 9"/></svg>',
   };
 
+  // Strips trailing slashes and a trailing "/v1" — the app appends its own
+  // "/v1/..." suffix, so a proxy URL saved with "/v1" already on it (an easy
+  // mistake, since that's how most API base URLs look) would otherwise
+  // produce a doubled "/v1/v1/..." path and a 404 from NVIDIA's API.
+  function normalizeProxyUrl(raw) {
+    return (raw || "").trim().replace(/\/+$/, "").replace(/\/v1$/i, "").replace(/\/+$/, "");
+  }
+
   // ---------- State ----------
   let state = {
     providers: {
       openrouter: { apiKey: localStorage.getItem(STORAGE_KEYS.apiKey) || "" },
       nvidia: {
         apiKey: localStorage.getItem(STORAGE_KEYS.nvidiaApiKey) || "",
-        proxyUrl: (localStorage.getItem(STORAGE_KEYS.nvidiaProxyUrl) || "").replace(/\/+$/, ""),
+        proxyUrl: normalizeProxyUrl(localStorage.getItem(STORAGE_KEYS.nvidiaProxyUrl)),
       },
     },
     systemPrompt: localStorage.getItem(STORAGE_KEYS.systemPrompt) || "",
@@ -354,7 +362,7 @@
     };
   }
   function apiBaseFor(providerId) {
-    if (providerId === "nvidia") return state.providers.nvidia.proxyUrl;
+    if (providerId === "nvidia") return state.providers.nvidia.proxyUrl + "/v1";
     return PROVIDERS[providerId].apiBase;
   }
   function isProviderUsable(providerId) {
@@ -1040,7 +1048,7 @@
   function saveSettings() {
     state.providers.openrouter.apiKey = el.apiKeyInput.value.trim();
     state.providers.nvidia.apiKey = el.nvidiaKeyInput.value.trim();
-    state.providers.nvidia.proxyUrl = el.nvidiaProxyInput.value.trim().replace(/\/+$/, "");
+    state.providers.nvidia.proxyUrl = normalizeProxyUrl(el.nvidiaProxyInput.value);
     state.systemPrompt = el.systemPromptInput.value;
     localStorage.setItem(STORAGE_KEYS.apiKey, state.providers.openrouter.apiKey);
     localStorage.setItem(STORAGE_KEYS.nvidiaApiKey, state.providers.nvidia.apiKey);

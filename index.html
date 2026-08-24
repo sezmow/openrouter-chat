@@ -111,7 +111,7 @@
         <button class="btn" id="toggle-nvidia-key-visibility">Show</button>
       </div>
       <label for="nvidia-proxy-input">CORS proxy URL</label>
-      <input type="text" id="nvidia-proxy-input" placeholder="https://your-worker.workers.dev">
+      <input type="text" id="nvidia-proxy-input" placeholder="https://your-worker.workers.dev (no /v1 at the end)">
       <div class="modal-note">Get a key at build.nvidia.com. NVIDIA's API has no CORS support, so browser requests need a small relay — see <code>nvidia-proxy-worker.js</code> in the repo and the README for the one-time Cloudflare Worker setup. Your key is sent through the proxy on each request only; it's never stored there.</div>
     </div>
 
