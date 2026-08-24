@@ -115,12 +115,51 @@
     seg = seg.replace(/(^|[^_\w])_([^_\n]+)_(?!\w)/g, "$1<em>$2</em>");
     return seg;
   }
+  function splitTableRow(line) {
+    let cells = line.split("|");
+    if (cells.length && cells[0].trim() === "") cells.shift();
+    if (cells.length && cells[cells.length - 1].trim() === "") cells.pop();
+    return cells.map((c) => c.trim());
+  }
+  function isTableSeparatorRow(line) {
+    const cells = splitTableRow(line);
+    if (!cells.length) return false;
+    return cells.every((c) => /^:?-+:?$/.test(c));
+  }
   function renderMarkdownBlock(text) {
     const lines = text.split("\n");
     let html = "";
     let i = 0;
     while (i < lines.length) {
       const line = lines[i];
+      if (line.includes("|") && i + 1 < lines.length && isTableSeparatorRow(lines[i + 1])) {
+        const headerCells = splitTableRow(line);
+        const aligns = splitTableRow(lines[i + 1]).map((c) => {
+          const left = c.startsWith(":");
+          const right = c.endsWith(":");
+          if (left && right) return "center";
+          if (right) return "right";
+          if (left) return "left";
+          return "";
+        });
+        i += 2;
+        const bodyRows = [];
+        while (i < lines.length && lines[i].includes("|") && lines[i].trim() !== "") {
+          bodyRows.push(splitTableRow(lines[i]));
+          i++;
+        }
+        const alignAttr = (idx) => (aligns[idx] ? ' style="text-align:' + aligns[idx] + '"' : "");
+        html += "<table><thead><tr>";
+        headerCells.forEach((c, ci) => { html += "<th" + alignAttr(ci) + ">" + renderInline(c) + "</th>"; });
+        html += "</tr></thead><tbody>";
+        bodyRows.forEach((row) => {
+          html += "<tr>";
+          row.forEach((c, ci) => { html += "<td" + alignAttr(ci) + ">" + renderInline(c) + "</td>"; });
+          html += "</tr>";
+        });
+        html += "</tbody></table>";
+        continue;
+      }
       const headerMatch = line.match(/^(#{1,6})\s+(.*)$/);
       if (headerMatch) {
         const level = headerMatch[1].length;
