@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OpenRouter Chat</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+  <div id="sidebar">
+    <div class="sidebar-header">
+      <button class="new-chat-btn" id="new-chat-btn">
+        <span>&#43;</span><span>New chat</span>
+      </button>
+      <button class="icon-btn" id="collapse-btn" title="Collapse sidebar">&#9776;</button>
+    </div>
+    <div id="conversation-list"></div>
+    <div class="sidebar-footer">
+      <button class="settings-btn" id="settings-btn">&#9881;&nbsp;&nbsp;API key &amp; settings</button>
+    </div>
+  </div>
+
+  <div id="main">
+    <div id="topbar">
+      <button class="icon-btn" id="expand-btn" style="display:none;" title="Show sidebar">&#9776;</button>
+      <div id="model-select-wrap">
+        <input list="models-datalist" id="model-input" placeholder="Model (e.g. openai/gpt-4o)">
+        <datalist id="models-datalist"></datalist>
+        <button id="fetch-models-btn" class="topbar-btn">Fetch models</button>
+        <select id="pricing-filter" class="topbar-select" title="Filter by pricing">
+          <option value="all">All pricing</option>
+          <option value="free">Free only</option>
+          <option value="paid">Paid only</option>
+        </select>
+        <label class="filter-chip"><input type="checkbox" id="filter-image-gen"> Image gen</label>
+        <label class="filter-chip"><input type="checkbox" id="filter-thinking"> Thinking</label>
+      </div>
+      <span class="topbar-status" id="topbar-status"></span>
+    </div>
+
+    <div id="messages"></div>
+
+    <div id="composer-wrap">
+      <div id="error-container"></div>
+      <div id="composer">
+        <textarea id="composer-input" rows="1" placeholder="Message..."></textarea>
+        <button id="web-toggle" type="button" title="Let the model search the web for this reply (extra cost applies, even on free models)" aria-pressed="false">&#127760;</button>
+        <select id="effort-select" title="Reasoning effort" disabled>
+          <option value="">Effort</option>
+        </select>
+        <button id="send-btn" title="Send">&#8593;</button>
+      </div>
+      <div class="composer-hint">Runs entirely in your browser and calls the OpenRouter API directly. Your key is stored only in this browser's local storage.</div>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay hidden" id="settings-modal">
+  <div class="modal">
+    <h2>API key &amp; settings</h2>
+    <label for="api-key-input">OpenRouter API key</label>
+    <div class="key-row">
+      <input type="password" id="api-key-input" placeholder="sk-or-v1-...">
+      <button class="btn" id="toggle-key-visibility">Show</button>
+    </div>
+    <label for="system-prompt-input">System prompt (optional)</label>
+    <textarea id="system-prompt-input" placeholder="e.g. You are a concise assistant."></textarea>
+    <div class="modal-note">Your key never leaves your browser except in direct calls to openrouter.ai. It is saved in localStorage on this device. Get a key at openrouter.ai/keys.</div>
+    <div class="modal-actions">
+      <button class="btn" id="settings-cancel-btn">Cancel</button>
+      <button class="btn btn-primary" id="settings-save-btn">Save</button>
+    </div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
