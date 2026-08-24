@@ -4,7 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>OpenRouter Chat</title>
-<link rel="stylesheet" href="style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%2312b48a'/%3E%3Cpath d='M6 8h12M6 12h8' stroke='%23101010' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="style.css?v=1">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.18.4/dist/katex.min.css" integrity="sha384-u1zONI5gPXUx0UKI62c75/zww972y0v2rSK5ZYlVdS6xEuWDeZWUI66v6t1gvlXJ" crossorigin="anonymous">
 <script defer src="https://cdn.jsdelivr.net/npm/katex@0.18.4/dist/katex.min.js" integrity="sha384-ykMNcWQhhTUb0YV9SPpPUFURHZ+tWmubkakGBP+OgNK/UXdO2gtzglWx0Rj9hnO3" crossorigin="anonymous"></script>
 </head>
@@ -99,6 +100,10 @@
   </div>
 </div>
 
-<script defer src="app.js"></script>
+<!-- Bump ?v= on every app.js/style.css change: GitHub Pages' CDN caches
+     index.html and app.js independently, so without a version bump a
+     stale-edge index.html can end up paired with a newer app.js (or vice
+     versa) and crash on a DOM element the other side doesn't expect. -->
+<script defer src="app.js?v=1"></script>
 </body>
 </html>
