@@ -68,9 +68,10 @@
     filterThinking: document.getElementById("filter-thinking"),
     effortSelect: document.getElementById("effort-select"),
     webToggle: document.getElementById("web-toggle"),
+    filtersBtn: document.getElementById("filters-btn"),
+    filtersPopover: document.getElementById("filters-popover"),
   };
 
-  el.modelInput.value = state.model;
   el.webToggle.classList.toggle("active", state.webSearchEnabled);
   el.webToggle.setAttribute("aria-pressed", String(state.webSearchEnabled));
 
@@ -152,11 +153,13 @@
     return state.conversations.find((c) => c.id === state.activeId) || null;
   }
   function createConversation() {
-    const conv = { id: uid(), title: "New chat", messages: [], createdAt: Date.now() };
+    const startModel = el.modelInput.value.trim() || state.model || DEFAULT_MODEL;
+    const conv = { id: uid(), title: "New chat", messages: [], createdAt: Date.now(), model: startModel };
     state.conversations.unshift(conv);
     state.activeId = conv.id;
     saveConversations();
     saveActiveId();
+    applyActiveConversationModel();
     return conv;
   }
   function deleteConversation(id) {
@@ -164,6 +167,7 @@
     if (state.activeId === id) {
       state.activeId = state.conversations.length ? state.conversations[0].id : null;
       saveActiveId();
+      applyActiveConversationModel();
     }
     saveConversations();
     renderSidebar();
@@ -173,8 +177,16 @@
     state.activeId = id;
     saveActiveId();
     clearError();
+    applyActiveConversationModel();
     renderSidebar();
     renderMessages();
+  }
+  function applyActiveConversationModel() {
+    const conv = getActiveConversation();
+    const model = (conv && conv.model) || state.model || DEFAULT_MODEL;
+    el.modelInput.value = model;
+    setModel(model);
+    refreshEffortSelect();
   }
 
   // ---------- Rendering: sidebar ----------
@@ -188,7 +200,7 @@
       title.textContent = conv.title || "New chat";
       const del = document.createElement("button");
       del.className = "conv-delete";
-      del.textContent = "✕";
+      del.innerHTML = '<svg class="icon icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="5" y1="5" x2="19" y2="19"/><line x1="19" y1="5" x2="5" y2="19"/></svg>';
       del.title = "Delete";
       del.addEventListener("click", (e) => {
         e.stopPropagation();
@@ -309,6 +321,11 @@
   }
 
   // ---------- Models ----------
+  function updateFiltersBadge() {
+    const f = state.modelFilters;
+    const active = f.pricing !== "all" || f.imageGen || f.thinking;
+    el.filtersBtn.classList.toggle("has-active", active);
+  }
   function rebuildModelsDatalist() {
     const filtered = state.allModels.filter(passesModelFilters);
     el.modelsDatalist.innerHTML = "";
@@ -326,7 +343,10 @@
     if (!el.modelInput.value && filtered.length) {
       el.modelInput.value = filtered[0].id;
       setModel(filtered[0].id);
+      const conv = getActiveConversation();
+      if (conv) { conv.model = filtered[0].id; saveConversations(); }
     }
+    updateFiltersBadge();
     refreshEffortSelect();
   }
   async function fetchModels() {
@@ -412,6 +432,7 @@
 
     let conv = getActiveConversation();
     if (!conv) conv = createConversation();
+    conv.model = model;
 
     conv.messages.push({ role: "user", content: text });
     if (conv.messages.filter((m) => m.role === "user").length === 1) autoTitle(conv);
@@ -596,7 +617,10 @@
   });
   el.fetchModelsBtn.addEventListener("click", fetchModels);
   el.modelInput.addEventListener("change", () => {
-    setModel(el.modelInput.value.trim());
+    const model = el.modelInput.value.trim();
+    setModel(model);
+    const conv = getActiveConversation();
+    if (conv) { conv.model = model; saveConversations(); }
     refreshEffortSelect();
   });
   el.pricingFilter.addEventListener("change", () => {
@@ -610,6 +634,23 @@
   el.filterThinking.addEventListener("change", () => {
     state.modelFilters.thinking = el.filterThinking.checked;
     rebuildModelsDatalist();
+  });
+  el.filtersBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const opening = el.filtersPopover.classList.contains("hidden");
+    el.filtersPopover.classList.toggle("hidden", !opening);
+    el.filtersBtn.setAttribute("aria-expanded", String(opening));
+  });
+  el.filtersPopover.addEventListener("click", (e) => e.stopPropagation());
+  document.addEventListener("click", () => {
+    el.filtersPopover.classList.add("hidden");
+    el.filtersBtn.setAttribute("aria-expanded", "false");
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      el.filtersPopover.classList.add("hidden");
+      el.filtersBtn.setAttribute("aria-expanded", "false");
+    }
   });
   el.webToggle.addEventListener("click", () => {
     state.webSearchEnabled = !state.webSearchEnabled;
@@ -636,6 +677,8 @@
         state.activeId = state.conversations[0].id;
       }
     }
+    applyActiveConversationModel();
+    updateFiltersBadge();
     renderSidebar();
     renderMessages();
     updateSendButton();

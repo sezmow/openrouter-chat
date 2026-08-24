@@ -11,30 +11,47 @@
   <div id="sidebar">
     <div class="sidebar-header">
       <button class="new-chat-btn" id="new-chat-btn">
-        <span>&#43;</span><span>New chat</span>
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        <span>New chat</span>
       </button>
-      <button class="icon-btn" id="collapse-btn" title="Collapse sidebar">&#9776;</button>
+      <button class="icon-btn" id="collapse-btn" title="Collapse sidebar">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/></svg>
+      </button>
     </div>
     <div id="conversation-list"></div>
     <div class="sidebar-footer">
-      <button class="settings-btn" id="settings-btn">&#9881;&nbsp;&nbsp;API key &amp; settings</button>
+      <button class="settings-btn" id="settings-btn">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="7.5"/><circle cx="12" cy="12" r="2.2" fill="currentColor" stroke="none"/><line x1="12" y1="2" x2="12" y2="4.5"/><line x1="12" y1="19.5" x2="12" y2="22"/><line x1="2" y1="12" x2="4.5" y2="12"/><line x1="19.5" y1="12" x2="22" y2="12"/></svg>
+        <span>API key &amp; settings</span>
+      </button>
     </div>
   </div>
 
   <div id="main">
     <div id="topbar">
-      <button class="icon-btn" id="expand-btn" style="display:none;" title="Show sidebar">&#9776;</button>
+      <button class="icon-btn" id="expand-btn" style="display:none;" title="Show sidebar">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/></svg>
+      </button>
       <div id="model-select-wrap">
         <input list="models-datalist" id="model-input" placeholder="Model (e.g. openai/gpt-4o)">
         <datalist id="models-datalist"></datalist>
         <button id="fetch-models-btn" class="topbar-btn">Fetch models</button>
-        <select id="pricing-filter" class="topbar-select" title="Filter by pricing">
-          <option value="all">All pricing</option>
-          <option value="free">Free only</option>
-          <option value="paid">Paid only</option>
-        </select>
-        <label class="filter-chip"><input type="checkbox" id="filter-image-gen"> Image gen</label>
-        <label class="filter-chip"><input type="checkbox" id="filter-thinking"> Thinking</label>
+        <button id="filters-btn" class="topbar-btn" type="button" aria-expanded="false">
+          <svg class="icon icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="4" y1="6" x2="20" y2="6"/><circle cx="9" cy="6" r="2" fill="currentColor" stroke="none"/><line x1="4" y1="12" x2="20" y2="12"/><circle cx="15" cy="12" r="2" fill="currentColor" stroke="none"/><line x1="4" y1="18" x2="20" y2="18"/><circle cx="7" cy="18" r="2" fill="currentColor" stroke="none"/></svg>
+          <span>Filters</span>
+          <span class="filter-dot"></span>
+        </button>
+        <div class="popover hidden" id="filters-popover">
+          <div class="popover-label">Pricing</div>
+          <select id="pricing-filter" title="Filter by pricing">
+            <option value="all">All pricing</option>
+            <option value="free">Free only</option>
+            <option value="paid">Paid only</option>
+          </select>
+          <div class="popover-label">Capabilities</div>
+          <label class="popover-check"><input type="checkbox" id="filter-image-gen"> Image generation</label>
+          <label class="popover-check"><input type="checkbox" id="filter-thinking"> Thinking / reasoning</label>
+        </div>
       </div>
       <span class="topbar-status" id="topbar-status"></span>
     </div>
@@ -45,11 +62,15 @@
       <div id="error-container"></div>
       <div id="composer">
         <textarea id="composer-input" rows="1" placeholder="Message..."></textarea>
-        <button id="web-toggle" type="button" title="Let the model search the web for this reply (extra cost applies, even on free models)" aria-pressed="false">&#127760;</button>
+        <button id="web-toggle" type="button" title="Let the model search the web for this reply (extra cost applies, even on free models)" aria-pressed="false">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><ellipse cx="12" cy="12" rx="4" ry="9"/><line x1="3" y1="12" x2="21" y2="12"/></svg>
+        </button>
         <select id="effort-select" title="Reasoning effort" disabled>
           <option value="">Effort</option>
         </select>
-        <button id="send-btn" title="Send">&#8593;</button>
+        <button id="send-btn" title="Send">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="6 11 12 5 18 11"/></svg>
+        </button>
       </div>
       <div class="composer-hint">Runs entirely in your browser and calls the OpenRouter API directly. Your key is stored only in this browser's local storage.</div>
     </div>
