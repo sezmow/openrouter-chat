@@ -18,6 +18,12 @@
     reasoning: { icon: "\u{1F9E0}", label: "Reasoning" },
     generatingImage: { icon: "\u{1F3A8}", label: "Generating image" },
   };
+  const ICON_SVG = {
+    copy: '<svg class="icon icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>',
+    check: '<svg class="icon icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>',
+    edit: '<svg class="icon icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>',
+    regenerate: '<svg class="icon icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7"/><polyline points="21 3 21 9 15 9"/></svg>',
+  };
 
   // ---------- State ----------
   let state = {
@@ -27,6 +33,7 @@
     conversations: [],
     activeId: null,
     isStreaming: false,
+    abortController: null,
     modelsById: {},
     allModels: [],
     modelFilters: { pricing: "all", imageGen: false, thinking: false },
@@ -70,6 +77,7 @@
     webToggle: document.getElementById("web-toggle"),
     filtersBtn: document.getElementById("filters-btn"),
     filtersPopover: document.getElementById("filters-popover"),
+    composerCost: document.getElementById("composer-cost"),
   };
 
   el.webToggle.classList.toggle("active", state.webSearchEnabled);
@@ -97,26 +105,118 @@
       .replace(/</g, "&lt;")
       .replace(/>/g, "&gt;");
   }
-  // Minimal markdown: fenced code blocks, inline code, bold
-  function renderMarkdown(text) {
-    const parts = text.split(/```/g);
+  // Minimal markdown: fenced code blocks, headers, lists, links, bold/italic/inline code
+  function renderInline(text) {
+    let seg = escapeHtml(text);
+    seg = seg.replace(/`([^`]+)`/g, "<code>$1</code>");
+    seg = seg.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+    seg = seg.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+    seg = seg.replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, "$1<em>$2</em>");
+    seg = seg.replace(/(^|[^_\w])_([^_\n]+)_(?!\w)/g, "$1<em>$2</em>");
+    return seg;
+  }
+  function renderMarkdownBlock(text) {
+    const lines = text.split("\n");
     let html = "";
-    for (let i = 0; i < parts.length; i++) {
-      if (i % 2 === 1) {
-        let block = parts[i];
+    let i = 0;
+    while (i < lines.length) {
+      const line = lines[i];
+      const headerMatch = line.match(/^(#{1,6})\s+(.*)$/);
+      if (headerMatch) {
+        const level = headerMatch[1].length;
+        html += "<h" + level + ">" + renderInline(headerMatch[2]) + "</h" + level + ">";
+        i++;
+        continue;
+      }
+      if (/^[-*]\s+/.test(line)) {
+        let items = "";
+        while (i < lines.length && /^[-*]\s+/.test(lines[i])) {
+          items += "<li>" + renderInline(lines[i].replace(/^[-*]\s+/, "")) + "</li>";
+          i++;
+        }
+        html += "<ul>" + items + "</ul>";
+        continue;
+      }
+      if (/^\d+\.\s+/.test(line)) {
+        let items = "";
+        while (i < lines.length && /^\d+\.\s+/.test(lines[i])) {
+          items += "<li>" + renderInline(lines[i].replace(/^\d+\.\s+/, "")) + "</li>";
+          i++;
+        }
+        html += "<ol>" + items + "</ol>";
+        continue;
+      }
+      html += renderInline(line) + (i < lines.length - 1 ? "\n" : "");
+      i++;
+    }
+    return html;
+  }
+  // Tokenize into code fences, math spans (left untouched so KaTeX can find them
+  // and our own bold/italic regexes can't corrupt LaTeX source), and plain text.
+  function tokenizeMarkdown(text) {
+    const re = /```[\s\S]*?```|\$\$[\s\S]+?\$\$|\$[^\n$]+?\$/g;
+    const tokens = [];
+    let lastIndex = 0;
+    let m;
+    while ((m = re.exec(text))) {
+      if (m.index > lastIndex) tokens.push({ type: "text", content: text.slice(lastIndex, m.index) });
+      const matched = m[0];
+      if (matched.startsWith("```")) {
+        tokens.push({ type: "code", content: matched });
+      } else {
+        const inner = matched.startsWith("$$") ? matched.slice(2, -2) : matched.slice(1, -1);
+        const looksLikeBareCurrency = /^\s*\d[\d,]*(\.\d+)?\s*$/.test(inner);
+        // Two dollar amounts in one sentence ("$5 and $10") can look like a math
+        // span too; back off if the content reads like prose (consecutive plain words).
+        const looksLikeProse = /([a-zA-Z]{3,}\s+){1,}[a-zA-Z]{3,}/.test(inner);
+        tokens.push({ type: (looksLikeBareCurrency || looksLikeProse) ? "text" : "math", content: matched });
+      }
+      lastIndex = re.lastIndex;
+    }
+    if (lastIndex < text.length) tokens.push({ type: "text", content: text.slice(lastIndex) });
+    return tokens;
+  }
+  // Renders markdown to {html, mathSpans}. Math placeholders are empty elements
+  // by id; renderMathSpans() fills them in afterward via katex.render() directly
+  // on those exact ids — never a blanket text scan, so a span our own tokenizer
+  // ruled out as prose/currency can never get caught by a second-pass scanner.
+  function renderMarkdown(text) {
+    const tokens = tokenizeMarkdown(text);
+    let html = "";
+    const mathSpans = [];
+    for (const tok of tokens) {
+      if (tok.type === "code") {
+        let block = tok.content.slice(3, -3);
         const firstNewline = block.indexOf("\n");
         if (firstNewline !== -1 && /^[a-zA-Z0-9_+-]*$/.test(block.slice(0, firstNewline).trim())) {
           block = block.slice(firstNewline + 1);
         }
         html += "<pre><code>" + escapeHtml(block.replace(/\n$/, "")) + "</code></pre>";
+      } else if (tok.type === "math") {
+        const isDisplay = tok.content.startsWith("$$");
+        const latex = isDisplay ? tok.content.slice(2, -2) : tok.content.slice(1, -1);
+        const id = "katex-" + uid();
+        mathSpans.push({ id: id, latex: latex, display: isDisplay });
+        html += isDisplay
+          ? '<div class="katex-block" id="' + id + '"></div>'
+          : '<span id="' + id + '"></span>';
       } else {
-        let seg = escapeHtml(parts[i]);
-        seg = seg.replace(/`([^`]+)`/g, "<code>$1</code>");
-        seg = seg.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
-        html += seg;
+        html += renderMarkdownBlock(tok.content);
       }
     }
-    return html;
+    return { html: html, mathSpans: mathSpans };
+  }
+  function renderMathSpans(container, mathSpans) {
+    if (!window.katex || !mathSpans.length) return;
+    mathSpans.forEach((s) => {
+      const target = container.querySelector("#" + s.id);
+      if (!target) return;
+      try {
+        window.katex.render(s.latex, target, { throwOnError: false, displayMode: s.display });
+      } catch (e) {
+        target.textContent = s.display ? ("$$" + s.latex + "$$") : ("$" + s.latex + "$");
+      }
+    });
   }
   function formatApiError(errObj) {
     if (!errObj) return "Unknown error";
@@ -198,6 +298,11 @@
       const title = document.createElement("span");
       title.className = "conv-title";
       title.textContent = conv.title || "New chat";
+      title.title = "Double-click to rename";
+      title.addEventListener("dblclick", (e) => {
+        e.stopPropagation();
+        startRenameConversation(item, conv);
+      });
       const del = document.createElement("button");
       del.className = "conv-delete";
       del.innerHTML = '<svg class="icon icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="5" y1="5" x2="19" y2="19"/><line x1="19" y1="5" x2="5" y2="19"/></svg>';
@@ -212,27 +317,116 @@
       el.convList.appendChild(item);
     });
   }
+  function startRenameConversation(item, conv) {
+    const titleEl = item.querySelector(".conv-title");
+    const input = document.createElement("input");
+    input.className = "conv-rename-input";
+    input.value = conv.title || "";
+    titleEl.replaceWith(input);
+    input.focus();
+    input.select();
+    const commit = () => {
+      const val = input.value.trim();
+      conv.title = val || conv.title || "New chat";
+      saveConversations();
+      renderSidebar();
+    };
+    input.addEventListener("keydown", (e) => {
+      e.stopPropagation();
+      if (e.key === "Enter") { e.preventDefault(); commit(); }
+      if (e.key === "Escape") { e.preventDefault(); renderSidebar(); }
+    });
+    input.addEventListener("blur", commit);
+    input.addEventListener("click", (e) => e.stopPropagation());
+  }
 
   // ---------- Rendering: messages ----------
-  function renderMessages() {
+  function renderMessages(preserveScroll) {
     const conv = getActiveConversation();
+    const shouldStickToBottom = !preserveScroll || isNearBottom();
     el.messages.innerHTML = "";
     if (!conv || conv.messages.length === 0) {
       const empty = document.createElement("div");
       empty.className = "empty-state";
       empty.innerHTML = '<div>What can I help with?</div><div class="hint">Set your API key in settings, fetch or type a model, then start chatting.</div>';
       el.messages.appendChild(empty);
+      updateCostSummary(null);
       return;
     }
-    conv.messages.forEach((m) => appendMessageEl(m.role, m.content, m.citations, m.images));
-    el.messages.scrollTop = el.messages.scrollHeight;
+    conv.messages.forEach((m, idx) => appendMessageEl(conv, idx, idx === conv.messages.length - 1));
+    if (shouldStickToBottom) el.messages.scrollTop = el.messages.scrollHeight;
+    updateCostSummary(conv);
   }
-  function appendMessageEl(role, content, citations, images) {
+  function makeActionBtn(iconHtml, title, onClick) {
+    const btn = document.createElement("button");
+    btn.className = "msg-action-btn";
+    btn.type = "button";
+    btn.innerHTML = iconHtml;
+    btn.title = title;
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      onClick(btn);
+    });
+    return btn;
+  }
+  function copyMessageText(text, btn) {
+    navigator.clipboard.writeText(text || "").then(() => {
+      const original = btn.innerHTML;
+      btn.innerHTML = ICON_SVG.check;
+      setTimeout(() => { btn.innerHTML = original; }, 1200);
+    }).catch(() => {
+      showError("Couldn't copy to clipboard.");
+    });
+  }
+  function formatUsage(usage) {
+    const parts = [];
+    if (typeof usage.completionTokens === "number") parts.push(usage.completionTokens.toLocaleString() + " tokens");
+    if (typeof usage.cost === "number" && usage.cost > 0) parts.push("$" + usage.cost.toFixed(usage.cost < 0.01 ? 5 : 4));
+    return parts.join(" · ");
+  }
+  function updateCostSummary(conv) {
+    if (!conv) { el.composerCost.textContent = ""; return; }
+    const total = conv.messages.reduce((sum, m) => sum + ((m.usage && m.usage.cost) || 0), 0);
+    el.composerCost.textContent = total > 0 ? ("This chat: $" + total.toFixed(total < 0.01 ? 5 : 4)) : "";
+  }
+  function appendMessageEl(conv, idx, isLast) {
+    const m = conv.messages[idx];
     const row = document.createElement("div");
-    row.className = "msg-row " + role;
+    row.className = "msg-row " + m.role;
+    const col = document.createElement("div");
+    col.className = "msg-col";
     const bubble = document.createElement("div");
     bubble.className = "msg-bubble";
-    bubble.innerHTML = renderMarkdown(content || "") + renderImages(images) + renderCitations(citations);
+    const rendered = renderMarkdown(m.content || "");
+    bubble.innerHTML = rendered.html + renderImages(m.images) + renderCitations(m.citations);
+    renderMathSpans(bubble, rendered.mathSpans);
+    if (m.role === "assistant" && m.usage) {
+      const usageEl = document.createElement("div");
+      usageEl.className = "msg-usage";
+      usageEl.textContent = formatUsage(m.usage);
+      bubble.appendChild(usageEl);
+    }
+    col.appendChild(bubble);
+
+    const actions = document.createElement("div");
+    actions.className = "msg-actions";
+    actions.appendChild(makeActionBtn(ICON_SVG.copy, "Copy", (btn) => copyMessageText(m.content, btn)));
+    if (m.role === "user") {
+      actions.appendChild(makeActionBtn(ICON_SVG.edit, "Edit & resend", () => startEditMessage(conv, idx)));
+    } else if (m.role === "assistant" && isLast) {
+      actions.appendChild(makeActionBtn(ICON_SVG.regenerate, "Regenerate", () => regenerateLastResponse()));
+    }
+    col.appendChild(actions);
+    row.appendChild(col);
+
+    el.messages.appendChild(row);
+    return bubble;
+  }
+  function createBareAssistantBubble() {
+    const row = document.createElement("div");
+    row.className = "msg-row assistant";
+    const bubble = document.createElement("div");
+    bubble.className = "msg-bubble";
     row.appendChild(bubble);
     el.messages.appendChild(row);
     return bubble;
@@ -419,6 +613,9 @@
   }
 
   // ---------- Sending messages ----------
+  function isNearBottom() {
+    return el.messages.scrollHeight - el.messages.scrollTop - el.messages.clientHeight < 80;
+  }
   async function sendMessage() {
     const text = el.composerInput.value.trim();
     if (!text || state.isStreaming) return;
@@ -444,14 +641,45 @@
     autoResizeComposer();
     clearError();
 
+    await generateAssistantReply(conv);
+  }
+  function regenerateLastResponse() {
+    if (state.isStreaming) return;
+    const conv = getActiveConversation();
+    if (!conv || !conv.messages.length) return;
+    const last = conv.messages[conv.messages.length - 1];
+    if (last.role !== "assistant") return;
+    conv.messages.pop();
+    saveConversations();
+    renderMessages();
+    generateAssistantReply(conv);
+  }
+  function startEditMessage(conv, idx) {
+    if (state.isStreaming) return;
+    const msg = conv.messages[idx];
+    if (!msg || msg.role !== "user") return;
+    conv.messages = conv.messages.slice(0, idx);
+    saveConversations();
+    renderSidebar();
+    renderMessages();
+    el.composerInput.value = msg.content;
+    autoResizeComposer();
+    updateSendButton();
+    clearError();
+    el.composerInput.focus();
+  }
+  async function generateAssistantReply(conv) {
+    const model = conv.model || el.modelInput.value.trim() || DEFAULT_MODEL;
     const modelInfo = getModelInfo(model);
     const canGenerateImages = !!(modelInfo && hasImageOutput(modelInfo));
     const idlePhase = canGenerateImages ? "generatingImage" : (state.webSearchEnabled ? "searching" : "connecting");
 
-    const assistantBubble = appendMessageEl("assistant", "");
+    const assistantBubble = createBareAssistantBubble();
     setThinkingPhase(assistantBubble, idlePhase);
-    el.messages.scrollTop = el.messages.scrollHeight;
+    if (isNearBottom()) el.messages.scrollTop = el.messages.scrollHeight;
 
+    const controller = new AbortController();
+    state.abortController = controller;
     state.isStreaming = true;
     updateSendButton();
 
@@ -482,11 +710,13 @@
     let assistantText = "";
     let citations = [];
     let images = [];
+    let usageInfo = null;
     try {
       const res = await fetch(API_BASE + "/chat/completions", {
         method: "POST",
         headers: authHeaders(),
         body: JSON.stringify(payload),
+        signal: controller.signal,
       });
 
       if (!res.ok || !res.body) {
@@ -516,6 +746,13 @@
           if (parsed.error) {
             throw new Error(formatApiError(parsed.error));
           }
+          if (parsed.usage) {
+            usageInfo = {
+              promptTokens: parsed.usage.prompt_tokens,
+              completionTokens: parsed.usage.completion_tokens,
+              cost: parsed.usage.cost,
+            };
+          }
           const delta = parsed.choices && parsed.choices[0] && parsed.choices[0].delta;
           if (!delta) continue;
           if (delta.annotations && delta.annotations.length) {
@@ -530,8 +767,10 @@
           }
           if (delta.content || images.length) {
             if (delta.content) assistantText += delta.content;
-            assistantBubble.innerHTML = renderMarkdown(assistantText) + renderImages(images) + renderCitations(citations);
-            el.messages.scrollTop = el.messages.scrollHeight;
+            const rendered = renderMarkdown(assistantText);
+            assistantBubble.innerHTML = rendered.html + renderImages(images) + renderCitations(citations);
+            renderMathSpans(assistantBubble, rendered.mathSpans);
+            if (isNearBottom()) el.messages.scrollTop = el.messages.scrollHeight;
           } else if (!assistantText) {
             const hasReasoning = delta.reasoning || (delta.reasoning_details && delta.reasoning_details.length);
             setThinkingPhase(assistantBubble, hasReasoning ? "reasoning" : idlePhase);
@@ -539,27 +778,34 @@
         }
       }
 
-      if (!assistantText && !images.length) assistantBubble.innerHTML = "<em>(empty response)</em>";
-      conv.messages.push({ role: "assistant", content: assistantText, citations: citations, images: images });
+      conv.messages.push({ role: "assistant", content: assistantText, citations: citations, images: images, usage: usageInfo });
       saveConversations();
+      renderSidebar();
+      renderMessages(true);
     } catch (err) {
-      assistantBubble.innerHTML = renderMarkdown(assistantText) + renderImages(images) + renderCitations(citations);
-      showError("Request failed: " + err.message);
+      const wasStopped = err.name === "AbortError";
+      if (!wasStopped) showError("Request failed: " + err.message);
       if (assistantText || images.length) {
-        conv.messages.push({ role: "assistant", content: assistantText, citations: citations, images: images });
+        conv.messages.push({ role: "assistant", content: assistantText, citations: citations, images: images, usage: usageInfo });
         saveConversations();
-      } else {
-        const row = assistantBubble.closest(".msg-row");
-        if (row) row.remove();
       }
+      renderSidebar();
+      renderMessages(true);
     } finally {
       state.isStreaming = false;
+      state.abortController = null;
       updateSendButton();
     }
   }
 
+  function stopStreaming() {
+    if (state.abortController) state.abortController.abort();
+  }
+
   function updateSendButton() {
-    el.sendBtn.disabled = state.isStreaming || !el.composerInput.value.trim();
+    el.sendBtn.classList.toggle("stop-mode", state.isStreaming);
+    el.sendBtn.title = state.isStreaming ? "Stop generating" : "Send";
+    el.sendBtn.disabled = state.isStreaming ? false : !el.composerInput.value.trim();
   }
 
   function autoResizeComposer() {
@@ -658,7 +904,10 @@
     el.webToggle.classList.toggle("active", state.webSearchEnabled);
     el.webToggle.setAttribute("aria-pressed", String(state.webSearchEnabled));
   });
-  el.sendBtn.addEventListener("click", sendMessage);
+  el.sendBtn.addEventListener("click", () => {
+    if (state.isStreaming) stopStreaming();
+    else sendMessage();
+  });
   el.composerInput.addEventListener("input", () => {
     autoResizeComposer();
     updateSendButton();
